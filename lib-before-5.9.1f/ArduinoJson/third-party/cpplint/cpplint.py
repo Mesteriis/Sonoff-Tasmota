@@ -370,14 +370,14 @@ def Match(pattern, s):
   # The regexp compilation caching is inlined in both Match and Search for
   # performance reasons; factoring it out into a separate function turns out
   # to be noticeably expensive.
-  if not pattern in _regexp_compile_cache:
+  if pattern not in _regexp_compile_cache:
     _regexp_compile_cache[pattern] = sre_compile.compile(pattern)
   return _regexp_compile_cache[pattern].match(s)
 
 
 def Search(pattern, s):
   """Searches the string for the pattern, caching the compiled regexp."""
-  if not pattern in _regexp_compile_cache:
+  if pattern not in _regexp_compile_cache:
     _regexp_compile_cache[pattern] = sre_compile.compile(pattern)
   return _regexp_compile_cache[pattern].search(s)
 
@@ -735,10 +735,10 @@ class FileInfo:
       # Not SVN <= 1.6? Try to find a git, hg, or svn top level directory by
       # searching up from the current path.
       root_dir = os.path.dirname(fullname)
-      while (root_dir != os.path.dirname(root_dir) and
-             not os.path.exists(os.path.join(root_dir, ".git")) and
-             not os.path.exists(os.path.join(root_dir, ".hg")) and
-             not os.path.exists(os.path.join(root_dir, ".svn"))):
+      while not (root_dir == os.path.dirname(root_dir)
+                 or os.path.exists(os.path.join(root_dir, ".git"))
+                 or os.path.exists(os.path.join(root_dir, ".hg"))
+                 or os.path.exists(os.path.join(root_dir, ".svn"))):
         root_dir = os.path.dirname(root_dir)
 
       if (os.path.exists(os.path.join(root_dir, ".git")) or
@@ -802,10 +802,7 @@ def _ShouldPrintError(category, confidence, linenum):
         is_filtered = False
     else:
       assert False  # should have been checked for in SetFilter.
-  if is_filtered:
-    return False
-
-  return True
+  return not is_filtered
 
 
 def Error(filename, linenum, category, confidence, message):
@@ -953,9 +950,9 @@ class CleansedLines(object):
     self.lines = []
     self.raw_lines = lines
     self.num_lines = len(lines)
-    for linenum in range(len(lines)):
-      self.lines.append(CleanseComments(lines[linenum]))
-      elided = self._CollapseStrings(lines[linenum])
+    for line in lines:
+      self.lines.append(CleanseComments(line))
+      elided = self._CollapseStrings(line)
       self.elided.append(CleanseComments(elided))
 
   def NumLines(self):
@@ -1006,10 +1003,12 @@ def CloseExpression(clean_lines, linenum, pos):
   startchar = line[pos]
   if startchar not in '({[':
     return (line, clean_lines.NumLines(), -1)
-  if startchar == '(': endchar = ')'
-  if startchar == '[': endchar = ']'
-  if startchar == '{': endchar = '}'
-
+  if startchar == '(':
+    endchar = ')'
+  elif startchar == '[':
+    endchar = ']'
+  elif startchar == '{':
+    endchar = '}'
   num_open = line.count(startchar) - line.count(endchar)
   while linenum < clean_lines.NumLines() and num_open > 0:
     linenum += 1
@@ -1456,8 +1455,8 @@ def CheckForNonStandardConstructs(filename, clean_lines, linenum,
     # Look for a bare ':'
     if Search('(^|[^:]):($|[^:])', line):
       classinfo.is_derived = True
-    if not classinfo.seen_open_brace:
-      return  # Everything else in this function is for after open brace
+  if not classinfo.seen_open_brace:
+    return  # Everything else in this function is for after open brace
 
   # The class may have been declared with namespace or classname qualifiers.
   # The constructor and destructor will not have those qualifiers.
@@ -1494,9 +1493,8 @@ def CheckForNonStandardConstructs(filename, clean_lines, linenum,
     # a virtual destructor. This is to make it less likely that people will
     # declare derived virtual destructors without declaring the base
     # destructor virtual.
-    if ((classinfo.virtual_method_linenumber is not None) and
-        (not classinfo.has_virtual_destructor) and
-        (not classinfo.is_derived)):  # Only warn for base classes
+    if not (classinfo.virtual_method_linenumber is None
+            or classinfo.has_virtual_destructor or classinfo.is_derived):  # Only warn for base classes
       error(filename, classinfo.linenum, 'runtime/virtual', 4,
             'The class %s probably needs a virtual destructor due to '
             'having virtual method(s), one declared at line %d.'
@@ -1611,10 +1609,6 @@ def CheckForFunctionLengths(filename, clean_lines, linenum,
   """
   lines = clean_lines.lines
   line = lines[linenum]
-  raw = clean_lines.raw_lines
-  raw_line = raw[linenum]
-  joined_line = ''
-
   starting_func = False
   regexp = r'(\w(\w|::|\*|\&|\s)*)\('  # decls * & space::name( ...
   match_result = Match(regexp, line)
@@ -1628,6 +1622,10 @@ def CheckForFunctionLengths(filename, clean_lines, linenum,
 
   if starting_func:
     body_found = False
+    raw = clean_lines.raw_lines
+    raw_line = raw[linenum]
+    joined_line = ''
+
     for start_linenum in range(linenum, clean_lines.NumLines()):
       start_line = lines[start_linenum]
       joined_line += ' ' + start_line.lstrip()
@@ -1684,7 +1682,7 @@ def CheckComment(comment, filename, linenum, error):
 
     middle_whitespace = match.group(3)
     # Comparisons made explicit for correctness -- pylint: disable-msg=C6403
-    if middle_whitespace != ' ' and middle_whitespace != '':
+    if middle_whitespace not in [' ', '']:
       error(filename, linenum, 'whitespace/todo', 2,
             'TODO(my_username) should be followed by a space')
 
@@ -1971,14 +1969,14 @@ def CheckSectionSpacing(filename, clean_lines, class_info, linenum, error):
     #  - We are forward-declaring an inner class that is semantically
     #    private, but needed to be public for implementation reasons.
     prev_line = clean_lines.lines[linenum - 1]
-    if (not IsBlankLine(prev_line) and
-        not Search(r'\b(class|struct)\b', prev_line)):
+    if not (IsBlankLine(prev_line)
+            or Search(r'\b(class|struct)\b', prev_line)):
       # Try a bit harder to find the beginning of the class.  This is to
       # account for multi-line base-specifier lists, e.g.:
       #   class Derived
       #       : public Base {
       end_class_head = class_info.linenum
-      for i in range(class_info.linenum, linenum):
+      for i in range(end_class_head, linenum):
         if Search(r'\{\s*$', clean_lines.lines[i]):
           end_class_head = i
           break
@@ -2326,12 +2324,9 @@ def _IsTestFilename(filename):
   Returns:
     True if 'filename' looks like a test, False otherwise.
   """
-  if (filename.endswith('_test.cc') or
+  return bool((filename.endswith('_test.cc') or
       filename.endswith('_unittest.cc') or
-      filename.endswith('_regtest.cc')):
-    return True
-  else:
-    return False
+      filename.endswith('_regtest.cc')))
 
 
 def _ClassifyInclude(fileinfo, include, is_system):
@@ -2358,12 +2353,12 @@ def _ClassifyInclude(fileinfo, include, is_system):
     >>> _ClassifyInclude(FileInfo('foo/foo.cc'), 'foo/bar.h', False)
     _OTHER_HEADER
   """
-  # This is a list of all standard c++ header files, except
-  # those already checked for above.
-  is_stl_h = include in _STL_HEADERS
-  is_cpp_h = is_stl_h or include in _CPP_HEADERS
-
   if is_system:
+    # This is a list of all standard c++ header files, except
+    # those already checked for above.
+    is_stl_h = include in _STL_HEADERS
+    is_cpp_h = is_stl_h or include in _CPP_HEADERS
+
     if is_cpp_h:
       return _CPP_SYS_HEADER
     else:
@@ -2375,9 +2370,10 @@ def _ClassifyInclude(fileinfo, include, is_system):
   target_dir, target_base = (
       os.path.split(_DropCommonSuffixes(fileinfo.RepositoryName())))
   include_dir, include_base = os.path.split(_DropCommonSuffixes(include))
-  if target_base == include_base and (
-      include_dir == target_dir or
-      include_dir == os.path.normpath(target_dir + '/../public')):
+  if target_base == include_base and include_dir in [
+      target_dir,
+      os.path.normpath(target_dir + '/../public'),
+  ]:
     return _LIKELY_MY_HEADER
 
   # If the target and include share some initial basename
@@ -3334,7 +3330,7 @@ def ParseArguments(args):
     if opt == '--help':
       PrintUsage(None)
     elif opt == '--output':
-      if not val in ('emacs', 'vs7'):
+      if val not in ('emacs', 'vs7'):
         PrintUsage('The only allowed output formats are emacs and vs7.')
       output_format = val
     elif opt == '--verbose':
